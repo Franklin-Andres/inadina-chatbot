@@ -1,0 +1,19 @@
+{
+    "sqltools.connections": [
+        {
+            "mysqlOptions": {
+                "authProtocol": "default",
+                "enableSsl": "Disabled"
+            },
+            "previewLimit": 50,
+            "server": "srv1244.hstgr.io",
+            "port": 3306,
+            "driver": "MySQL",
+            "password": "]w4@9F>NJ2aS",
+            "username": "u847983705_agente_ia_user",
+            "name": "Agente IA MySQL",
+            "connectionTimeout": 30,
+            "database": "u847983705_agente_ia_db"
+        }
+    ]
+}
