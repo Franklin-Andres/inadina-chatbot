@@ -14,6 +14,16 @@ const openai = new OpenAI({
     timeout: 60 * 1000
 });
 
+// base de datos aquí
+const dbConfig = {
+    host: process.env.DB_SERVER,
+    port: parseInt(process.env.DB_PORT, 10),
+    user: process.env.DB_USERNAME,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME,
+};
+
+
 console.log("OpenAI API Key:", process.env.OPENAI_API_KEY ? "Configurada" : "No configurada");
 console.log("OpenAI Assistant ID:", process.env.OPENAI_ASSISTANT_ID);
 
