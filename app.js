@@ -1,3 +1,11 @@
+/**
+ * WhatsApp Bot con Asistente de OpenAI e Integración de MySQL
+ * 
+ * Este script implementa un bot de WhatsApp que utiliza el asistente de OpenAI
+ * para procesar mensajes y almacena información en una base de datos MySQL.
+ */
+
+// Importaciones y configuración inicial
 const express = require('express');
 const body_parser = require('body-parser');
 const axios = require('axios');
@@ -6,8 +14,8 @@ const FormData = require('form-data');
 const mysql = require('mysql2/promise');
 require('dotenv').config();
 
+// Configuración de Express y OpenAI
 const app = express().use(body_parser.json());
-
 const token = process.env.WHATSAPP_TOKEN;
 const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
@@ -270,6 +278,16 @@ const transcriptAudio = async (mediaId) => {
     }
 };
 
+/**
+ * Función para procesar mensajes recibidos
+ * 
+ * @param {string} from - Número de teléfono del remitente
+ * @param {string} content - Contenido del mensaje
+ * @param {string} name - Nombre del remitente
+ * @param {string} [type='text'] - Tipo de mensaje ('text' o 'audio')
+ * @returns {Promise<string>} Respuesta del asistente
+ */
+
 const processMessage = async (from, content, name, type = 'text') => {
     try {
         await saveUser(from, name);
@@ -280,6 +298,7 @@ const processMessage = async (from, content, name, type = 'text') => {
             await saveAudioTranscription(messageId, content);
         }
 
+        // Procesar el mensaje con OpenAI
         let openAIThreadId;
         if (!userThreads.has(from)) {
             const thread = await createThread();
@@ -297,6 +316,7 @@ const processMessage = async (from, content, name, type = 'text') => {
             name: name || 'User'
         });
 
+        // Ejecutar el asistente de OpenAI
         const run = await startRun({ threadId: openAIThreadId });
 
         let runStatus;
@@ -315,6 +335,7 @@ const processMessage = async (from, content, name, type = 'text') => {
             throw new Error("La ejecución del asistente falló: " + runStatus.last_error?.message);
         }
 
+        // Obtener y guardar la respuesta del asistente
         const messages = await getMessages({ threadId: openAIThreadId });
         const response = messages[0].content[0].text.value;
         
