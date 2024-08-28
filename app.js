@@ -3,6 +3,7 @@ const body_parser = require('body-parser');
 const axios = require('axios');
 const OpenAI = require('openai');
 const FormData = require('form-data');
+const mysql = require('mysql2/promise');
 require('dotenv').config();
 
 const app = express().use(body_parser.json());
@@ -14,7 +15,7 @@ const openai = new OpenAI({
     timeout: 60 * 1000
 });
 
-// base de datos aquí
+// Configuración de la base de datos
 const dbConfig = {
     host: process.env.DB_SERVER,
     port: parseInt(process.env.DB_PORT, 10),
@@ -23,7 +24,6 @@ const dbConfig = {
     database: process.env.DB_NAME,
 };
 
-
 console.log("OpenAI API Key:", process.env.OPENAI_API_KEY ? "Configurada" : "No configurada");
 console.log("OpenAI Assistant ID:", process.env.OPENAI_ASSISTANT_ID);
 
@@ -31,6 +31,86 @@ console.log("OpenAI Assistant ID:", process.env.OPENAI_ASSISTANT_ID);
 const userThreads = new Map();
 
 let assistant;
+
+// Función para crear una conexión a la base de datos
+async function createDbConnection() {
+    return await mysql.createConnection(dbConfig);
+}
+
+// Función para guardar un usuario
+async function saveUser(phone, name) {
+    const connection = await createDbConnection();
+    try {
+        await connection.execute(
+            'INSERT INTO users (phone_number, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE name = ?',
+            [phone, name, name]
+        );
+    } finally {
+        await connection.end();
+    }
+}
+
+// Función para crear o obtener un hilo
+async function getOrCreateThread(userPhone) {
+    const connection = await createDbConnection();
+    try {
+        const [threads] = await connection.execute(
+            'SELECT id FROM threads WHERE user_phone = ? LIMIT 1',
+            [userPhone]
+        );
+        if (threads.length === 0) {
+            const [result] = await connection.execute(
+                'INSERT INTO threads (id, user_phone) VALUES (UUID(), ?)',
+                [userPhone]
+            );
+            return result.insertId;
+        } else {
+            return threads[0].id;
+        }
+    } finally {
+        await connection.end();
+    }
+}
+
+// Función para guardar un mensaje
+async function saveMessage(threadId, userPhone, content, type) {
+    const connection = await createDbConnection();
+    try {
+        const [result] = await connection.execute(
+            'INSERT INTO messages (id, thread_id, user_phone, content, type) VALUES (UUID(), ?, ?, ?, ?)',
+            [threadId, userPhone, content, type]
+        );
+        return result.insertId;
+    } finally {
+        await connection.end();
+    }
+}
+
+// Función para guardar una respuesta del asistente
+async function saveAssistantResponse(messageId, content) {
+    const connection = await createDbConnection();
+    try {
+        await connection.execute(
+            'INSERT INTO assistant_responses (message_id, content) VALUES (?, ?)',
+            [messageId, content]
+        );
+    } finally {
+        await connection.end();
+    }
+}
+
+// Función para guardar una transcripción de audio
+async function saveAudioTranscription(messageId, transcription) {
+    const connection = await createDbConnection();
+    try {
+        await connection.execute(
+            'INSERT INTO audio_transcriptions (message_id, transcription) VALUES (?, ?)',
+            [messageId, transcription]
+        );
+    } finally {
+        await connection.end();
+    }
+}
 
 async function verifyAssistant() {
     try {
@@ -190,32 +270,40 @@ const transcriptAudio = async (mediaId) => {
     }
 };
 
-const processMessage = async (from, content, name) => {
+const processMessage = async (from, content, name, type = 'text') => {
     try {
-        let threadId;
+        await saveUser(from, name);
+        const threadId = await getOrCreateThread(from);
+        const messageId = await saveMessage(threadId, from, content, type);
+
+        if (type === 'audio') {
+            await saveAudioTranscription(messageId, content);
+        }
+
+        let openAIThreadId;
         if (!userThreads.has(from)) {
             const thread = await createThread();
-            threadId = thread.id;
-            userThreads.set(from, threadId);
+            openAIThreadId = thread.id;
+            userThreads.set(from, openAIThreadId);
         } else {
-            threadId = userThreads.get(from);
+            openAIThreadId = userThreads.get(from);
         }
 
         await addMessage({
-            threadId,
+            threadId: openAIThreadId,
             message: content,
-            messageId: Date.now().toString(),
+            messageId: messageId,
             userId: from,
             name: name || 'User'
         });
 
-        const run = await startRun({ threadId });
+        const run = await startRun({ threadId: openAIThreadId });
 
         let runStatus;
         let attempts = 0;
-        const maxAttempts = 10; // Número máximo de intentos
+        const maxAttempts = 10;
         do {
-            runStatus = await getRun({ threadId, runId: run.id });
+            runStatus = await getRun({ threadId: openAIThreadId, runId: run.id });
             await new Promise(resolve => setTimeout(resolve, 1000));
             attempts++;
             if (attempts >= maxAttempts) {
@@ -227,8 +315,12 @@ const processMessage = async (from, content, name) => {
             throw new Error("La ejecución del asistente falló: " + runStatus.last_error?.message);
         }
 
-        const messages = await getMessages({ threadId });
-        return messages[0].content[0].text.value;
+        const messages = await getMessages({ threadId: openAIThreadId });
+        const response = messages[0].content[0].text.value;
+        
+        await saveAssistantResponse(messageId, response);
+
+        return response;
     } catch (error) {
         console.error('Error processing message:', error.message);
         if (error.message.includes("No assistant found")) {
@@ -280,7 +372,7 @@ app.post("/webhook", async (req, res) => {
                     await sendMessage(phone_number_id, from, `*Transcripción del audio:*\n\n"${content}"\n\n_Procesando con el asistente..._`);
                 }
 
-                const response = await processMessage(from, content, name);
+                const response = await processMessage(from, content, name, msg_type);
                 await sendMessage(phone_number_id, from, response);
             }
             res.sendStatus(200);
